@@ -1,0 +1,4 @@
+#!/bin/bash
+
+git_branch_stack.py pop $*
+

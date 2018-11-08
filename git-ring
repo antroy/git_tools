@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if [ "$1" == "--clean" ]
+then
+    shift
+    git_branch_stack.py clean $*
+else
+    git_branch_stack.py ring $*
+fi
