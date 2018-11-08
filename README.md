@@ -12,3 +12,15 @@ Usage:
     `git bp` - check out the previous branch in the ring.
     `git pop` - pop the current branch out of the ring. Same as git bp and then removing the branch with git ring.
 
+Autocompletion of `git co`
+--------------------------
+
+Add the following to your .bashrc:
+    
+    . /usr/share/bash-completion/completions/git
+
+    _git_co(){
+        _git_checkout $*
+    }
+
+(assuming this is where your git completion script is stored)
