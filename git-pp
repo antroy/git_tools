@@ -1,0 +1,25 @@
+#!/bin/bash
+
+git pull --prune && git graph -10
+dead_branches=`git branch --format='%(refname:short) [%(upstream) %(upstream:track)]' | grep '\[gone\]\]\|\[ \]' | cut -d' ' -f1`
+
+if [ "" != "$dead_branches" ]
+then
+    echo "Remove the following local branches that have no remote [y/N]?"
+    for branch in $dead_branches
+    do
+        echo $branch
+    done
+
+    read yes
+
+    if [ "$yes" == "y" ] || [ "$yes" == "Y" ]
+    then
+        for branch in $dead_branches
+        do
+            git branch --delete $branch
+        done
+    fi
+fi
+
+git ring --clean

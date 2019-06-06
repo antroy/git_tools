@@ -34,7 +34,7 @@ main () {
       esac
 
       check local  $1   && git branch -D $branch
-      check remote $1   && git push origin :$branch
+      check remote $1   && git push --no-verify origin :$branch
   done
 
 }
