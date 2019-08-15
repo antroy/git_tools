@@ -5,12 +5,12 @@ dead_branches=`git branch --format='%(refname:short) [%(upstream) %(upstream:tra
 
 if [ "" != "$dead_branches" ]
 then
-    echo "Remove the following local branches that have no remote [y/N]?"
     for branch in $dead_branches
     do
         echo $branch
     done
 
+    echo "Remove the above local branches that have no remote [y/N]?"
     read yes
 
     if [ "$yes" == "y" ] || [ "$yes" == "Y" ]
