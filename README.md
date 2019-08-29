@@ -11,6 +11,8 @@ Usage:
     `git bn` - check out the next branch in the ring.
     `git bp` - check out the previous branch in the ring.
     `git pop` - pop the current branch out of the ring. Same as git bp and then removing the branch with git ring.
+    `git pushup` - push the branch, linking it with the upstream branch of the same name.
+    `git clone-all` - Run git clone-all --help for full details. Keeps a list of repositories up to date and with hooks installed. Note - requires python3 and the argcomplete and pyyaml python modules.
 
 Autocompletion of `git co`
 --------------------------
