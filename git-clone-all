@@ -1,0 +1,428 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
+import argcomplete
+import argparse
+import datetime
+import os
+import re
+import shutil
+import subprocess
+import sys
+import yaml
+
+from multiprocessing import Pool, cpu_count
+
+HOOK_DIR = os.path.join(os.path.realpath(os.path.split(__file__)[0]), "hooks")
+
+HELP = '''
+CONFIGURATION
+=============
+
+Config file should reside in ~/.config/repos.yaml and be in the following format:
+
+    ---
+    project_one:
+        workspace: ~/project_one_repos
+        repos:
+            repo-one:
+                url: git@repo.org:company/repo-one.git
+            different-name:
+                url: git@github.com:company/repo-two.git
+        substitutions:
+            github.com: fake-hostname
+
+In this example, the script will clone the repos into the ~/project_one_repos
+directory. The first repo will be cloned fron the specified URL into the
+repo-one subdirectory. The second will be cloned into the different-name
+subdirectory, and the remote set to git@fake-hostname:company/repo-two.git.
+
+The substitutions are useful in order to configure an alternate ssh key for that
+repo, using ssh config as described below.
+
+Alternate SSH Keys
+==================
+
+Set up a substitution as described in the previous section to a descriptive
+(but fake) hostname. In your ~/.ssh/config file add the following entry:
+
+    Host fake-hostname
+        Hostname github.com
+        IdentityFile ~/.ssh/id_rsa_new_project
+        IdentitiesOnly yes
+
+This will map the fake hostname to the actual hostname, but use the project
+specific ssh key for git urls using the fake hostname.
+'''
+
+
+def opts(config):
+    all_projects = list(config.keys())
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=HELP
+    )
+    parser.add_argument("--hooks",
+                        help="Install hooks only",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("-a", "--analyse",
+                        help="Analyse workspace",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("-s", "--status",
+                        help="Show status of each project",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("-r", "--reconfigure",
+                        help="Reconfigure the workspaces updating the remotes",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("--revert",
+                        help="Revert back to an old remote if possible",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("--no-colour",
+                        help="Print in monochrome",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("-d", "--delete",
+                        help="Analyse workspace and prompt to delete",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("-p", "--pull",
+                        help="Pull rather than fetch for existing repos",
+                        action="store_true",
+                        default=False)
+
+    parser.add_argument("projects",
+                        help="Projects to process",
+                        nargs='*',
+                        choices=tuple(all_projects + [""]),
+                        default="")
+
+    argcomplete.autocomplete(parser)
+    out = parser.parse_args()
+
+    if not [p for p in out.projects if p]:
+        out.projects = all_projects
+
+    return out
+
+
+def git(context, cmd, directory):
+    git_cmd = ["git"] + cmd
+
+    out = subprocess.run(
+            git_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            cwd=directory
+    )
+
+    print(
+            col(BLUE)("%s " % context),
+            " ".join(git_cmd),
+            col(GREEN)("OK") if out.returncode == 0 else col(RED)("Error")
+    )
+
+    return out.stdout.split("\n")
+
+
+BOLD, RED, GREEN, YELLOW, BLUE = 1, 31, 32, 33, 34
+
+
+def col(code):
+    return lambda s: "\033[%sm%s\033[0m" % (code, s) if COLOURS_ON else s
+
+
+def m_col(colour):
+    return lambda m: col(colour)(m.group(0))
+
+
+def print_in_colour(lines):
+    patterns = {
+        "(?i)(error|fatal).*": m_col(RED)
+    }
+
+    for line in lines:
+        out = line.strip()
+
+        if out:
+            for patt, fn in patterns.items():
+                out = re.sub(patt, fn, out)
+
+            print(out)
+
+
+class Cloner:
+    def __init__(self, project, config, options):
+        self.project = project
+        self.workspace = os.path.expanduser(config['workspace'])
+        self.title = "%s - %s" % (self.project, self.workspace)
+        self.subs = config['substitutions']
+        self.repositories = {self.get_repo_dir(r):
+                             self.enhanced_data(r, config['repos'][r]) for r in config['repos']}
+        self.ignore = set(config['ignore'])
+
+        self.hooks_only = options.hooks
+        self.analysis = options.analyse
+        self.status = options.status
+        self.reconfigure = options.reconfigure
+        self.revert = options.revert
+        self.delete = options.delete
+        self.pull = options.pull
+
+        self.hooks_dir = config.get('hooks_dir', HOOK_DIR)
+
+        name_max = max([len(n) for n in [repo['name'] for repo in self.repositories.values()]])
+        self.name_templ = "%%-%ss" % name_max
+
+        self.remote_cache = {}
+
+    def format(self, name, width):
+        justification = (width - len(name)) // 2
+        padding = " " * justification
+        return padding + name
+
+    def enhanced_data(self, name, data):
+        data['name'] = name
+        return data
+
+    def get_repo_dir(self, repo_dir):
+        return os.path.join(self.workspace, repo_dir)
+
+    def run(self):
+        now = "%s" % datetime.datetime.now()
+        width = max(len(now), len(self.title))
+        title = self.format(self.title, width)
+        print(col(BOLD)(col(YELLOW)("=" * width)))
+        print(col(BOLD)(col(YELLOW)(title)))
+        print(col(BOLD)(col(YELLOW)("-" * width)))
+        print(col(BOLD)(col(YELLOW)(self.format(now, width))))
+        print(col(BOLD)(col(YELLOW)("=" * width)))
+
+        if self.analysis:
+            self.print_analysis()
+        elif self.status:
+            self.print_status()
+        elif self.reconfigure and self.revert:
+            self.revert_reconfigure()
+        elif self.reconfigure:
+            self.do_reconfigure()
+        else:
+            processes = max(1, cpu_count() - 1)
+            print("Using %s processes" % processes)
+
+            Pool(processes).map(self.process_repo, self.repositories.items())
+
+    def sub(self, uri):
+        out = uri
+        for f, r in self.subs.items():
+            out = out.replace(f, r)
+        return out
+
+    def process_repo(self, repo_data):
+        repo_dir, repo = repo_data
+        repo_url = self.sub(repo['url'])
+        name = self.name_templ % repo['name']
+
+        if not self.hooks_only:
+            if os.path.exists(repo_dir):
+                fetch_command = "pull" if self.pull else "fetch"
+                lines = git(name, [fetch_command], repo_dir)
+                print_in_colour(lines)
+            else:
+                self.make_parents(repo_dir)
+                lines = git(name, ["clone", repo_url, repo_dir], self.workspace)
+                print_in_colour(lines)
+
+        self.link_hooks(repo_dir, repo.get('ignore_hooks', False))
+
+    def make_parents(self, repo_dir):
+        parent = os.path.split(repo_dir)[0]
+
+        if not os.path.exists(parent):
+            os.makedirs(parent)
+
+    def link_hooks(self, repo_directory, ignore_hooks):
+        for hook in os.listdir(self.hooks_dir):
+            hook_path = os.path.join(repo_directory, '.git/hooks', hook)
+            hook_source = os.path.join(self.hooks_dir, hook)
+
+            if ignore_hooks:
+                if os.path.isfile(hook_path):
+                    print("Removing hook %s" % hook_path)
+                    os.remove(hook_path)
+
+            elif not os.path.islink(hook_path):
+                print("Adding hook:")
+                print("ln -s %s %s" % (hook_source, hook_path))
+                subprocess.run(["ln", "-s", hook_source, hook_path])
+
+    def ask_to_delete(self, path):
+        result = input("Delete this directory [y/n/q]?").strip().lower()
+        if result == "y":
+            shutil.rmtree(path)
+        elif result == "q":
+            sys.exit(0)
+
+    def print_analysis(self):
+        exp_dirs = self.repositories.keys()
+        act_dirs = set(
+            path
+            for d in os.listdir(self.workspace)
+            for path in map(lambda d: os.path.join(self.workspace, d), [d])
+            if os.path.isdir(path) and d not in self.ignore
+        )
+
+        missing_dirs = exp_dirs - act_dirs
+        run_clone_all = bool(missing_dirs)
+        extra_dirs = act_dirs - exp_dirs
+
+        if run_clone_all:
+            print("Some repos have not been cloned. Please run clone_all:")
+            for d in sorted(missing_dirs):
+                print("  " + d)
+            print()
+
+        if extra_dirs:
+            print("The following dirs are not in your repos.yaml:")
+            width = max(len(d) for d in extra_dirs)
+
+            for d in sorted(extra_dirs):
+                    res = subprocess.run(["git", "remote", "-v"],
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE,
+                                         universal_newlines=True,
+                                         cwd=d)
+
+                    templ = "  %%-%ss  [%%s]" % width
+                    if res.returncode == 0:
+                        print(templ % (
+                            d,
+                            re.sub(
+                                r"(?s).*(origin)\s+(\S+)\s+\(fetch\).*", r"\2",
+                                res.stdout)
+                            )
+                        )
+                    else:
+                        print(templ % (d, "Not a git repo"))
+                    if self.delete:
+                        self.ask_to_delete(d)
+            print()
+
+    def print_status(self):
+        dirs = self.repositories.keys()
+        length = max(len(os.path.split(d)[-1]) for d in dirs)
+        template = "%%-%ss: %%s" % length
+
+        for d in sorted(dirs):
+            res = subprocess.run(["git_stat_line"],
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE,
+                                 universal_newlines=True,
+                                 cwd=d)
+
+            project = os.path.split(d)[-1]
+            print(template % (project, res.stdout.strip()))
+
+    def remotes(self, folder):
+        if folder in self.remote_cache:
+            return self.remote_cache[folder]
+
+        results = subprocess.run(["git", "remote", "-v"],
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE,
+                                 universal_newlines=True,
+                                 cwd=folder).stdout.split("\n")
+        fetch_lines = [r.split() for r in results if "fetch" in r]
+        out = {r[0]: r[1] for r in fetch_lines}
+        self.remote_cache[folder] = out
+
+        return out
+
+    def revert_reconfigure(self):
+        act_dirs = set(
+            path
+            for d in os.listdir(self.workspace)
+            for path in [os.path.join(self.workspace, p) for p in [d]]
+            if os.path.isdir(path) and
+            d not in self.ignore and
+            "old" in self.remotes(path)
+        )
+
+        for r in act_dirs:
+            print("Reverting %s" % r)
+
+            print("  Modifying remotes")
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", self.remotes(r)['old']],
+                cwd=r)
+            print("  Deleting 'old' remote")
+            subprocess.run(["git", "remote", "remove", "old"], cwd=r)
+
+    def do_reconfigure(self):
+        exp_dirs = self.repositories.keys()
+        act_dirs = set(
+            path
+            for d in os.listdir(self.workspace)
+            for path in map(lambda d: os.path.join(self.workspace, d), [d])
+            if os.path.isdir(path) and d not in self.ignore
+        )
+
+        repos_of_interest = exp_dirs & act_dirs
+        print("REPOS: %s" % repos_of_interest)
+
+        def bad_repo(r):
+            remote = self.remotes(r)['origin']
+            exp = self.sub(self.repositories[r]['url'])
+            print("R: %s; E: %s" % (remote, exp))
+            out = not remote == exp
+            return out
+
+
+        to_fix = [r for r in repos_of_interest if bad_repo(r)]
+
+        print("Workspace: %s" % self.workspace)
+        if not to_fix:
+            print("  Nothing to do.")
+            return
+
+        for r in to_fix:
+            print("  Processing %s" % r)
+            old = self.remotes(r).get("old", "")
+            origin = self.remotes(r)["origin"]
+            new = self.sub(self.repositories[r]['url'])
+
+            if old:
+                print("    Deleting 'old' remote")
+                subprocess.run(["git", "remote", "remove", "old"], cwd=r)
+
+            print("    Modifying remotes")
+            subprocess.run(
+                ["git", "remote", "add", "old", origin],
+                cwd=r)
+            subprocess.run(
+                ["git", "remote", "set-url", "origin", new],
+                cwd=r)
+
+
+with open(os.path.expanduser('~/.config/repos.yaml')) as fh:
+    all_config = yaml.load(fh)
+
+options = opts(all_config)
+
+COLOURS_ON = not options.no_colour
+
+for project, conf in [(proj, all_config[proj]) for proj in options.projects]:
+    cloner = Cloner(project, conf, options)
+    cloner.run()

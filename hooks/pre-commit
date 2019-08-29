@@ -1,0 +1,20 @@
+#!/bin/bash
+
+files=`git diff --name-only --cached`
+code=0
+
+for f in $files
+do
+
+    if [[ -e $f ]]
+    then
+        grep -I -H -n "Z""Z""Z" $f
+
+        if [[ $? == 0 ]]
+        then
+           code=1
+        fi
+    fi
+done
+
+exit $code

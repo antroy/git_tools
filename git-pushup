@@ -1,0 +1,12 @@
+#!/bin/bash
+
+current=`git current-branch`
+
+if [[ "$1" == "" ]]
+then
+    remote=origin
+else
+    remote=$1
+fi
+
+git push -u $remote $current
