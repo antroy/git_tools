@@ -19,7 +19,7 @@ HELP = '''
 CONFIGURATION
 =============
 
-Config file should reside in ~/.config/repos.yaml and be in the following format:
+Config file is ~/.config/repos.yaml and be in the following format:
 
     ---
     project_one:
@@ -37,8 +37,8 @@ directory. The first repo will be cloned fron the specified URL into the
 repo-one subdirectory. The second will be cloned into the different-name
 subdirectory, and the remote set to git@fake-hostname:company/repo-two.git.
 
-The substitutions are useful in order to configure an alternate ssh key for that
-repo, using ssh config as described below.
+The substitutions are useful in order to configure an alternate ssh key for
+that repo, using ssh config as described below.
 
 Alternate SSH Keys
 ==================
@@ -168,10 +168,10 @@ class Cloner:
         self.project = project
         self.workspace = os.path.expanduser(config['workspace'])
         self.title = "%s - %s" % (self.project, self.workspace)
-        self.subs = config['substitutions']
+        self.subs = config.get('substitutions', {})
         self.repositories = {self.get_repo_dir(r):
                              self.enhanced_data(r, config['repos'][r]) for r in config['repos']}
-        self.ignore = set(config['ignore'])
+        self.ignore = set(config['ignore']) if 'ignore' in config else set()
 
         self.hooks_only = options.hooks
         self.analysis = options.analyse
@@ -183,7 +183,9 @@ class Cloner:
 
         self.hooks_dir = config.get('hooks_dir', HOOK_DIR)
 
-        name_max = max([len(n) for n in [repo['name'] for repo in self.repositories.values()]])
+        name_max = max([len(n)
+                        for n in [repo['name']
+                                  for repo in self.repositories.values()]])
         self.name_templ = "%%-%ss" % name_max
 
         self.remote_cache = {}
@@ -242,7 +244,8 @@ class Cloner:
                 print_in_colour(lines)
             else:
                 self.make_parents(repo_dir)
-                lines = git(name, ["clone", repo_url, repo_dir], self.workspace)
+                lines = git(name,
+                            ["clone", repo_url, repo_dir], self.workspace)
                 print_in_colour(lines)
 
         self.link_hooks(repo_dir, repo.get('ignore_hooks', False))
@@ -389,7 +392,6 @@ class Cloner:
             out = not remote == exp
             return out
 
-
         to_fix = [r for r in repos_of_interest if bad_repo(r)]
 
         print("Workspace: %s" % self.workspace)
@@ -416,8 +418,12 @@ class Cloner:
                 cwd=r)
 
 
-with open(os.path.expanduser('~/.config/repos.yaml')) as fh:
-    all_config = yaml.load(fh)
+filepath = os.path.expanduser('~/.config/repos.yaml')
+if os.path.exists(filepath):
+    with open(filepath) as fh:
+        all_config = yaml.load(fh)
+else:
+    all_config = {}
 
 options = opts(all_config)
 
