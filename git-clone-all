@@ -19,7 +19,7 @@ HELP = '''
 CONFIGURATION
 =============
 
-Config file is ~/.config/repos.yaml and be in the following format:
+Config file is %s and should be in the following format:
 
     ---
     project_one:
@@ -56,11 +56,35 @@ specific ssh key for git urls using the fake hostname.
 '''
 
 
-def opts(config):
+def projects(filename):
+    filepath = os.path.expanduser(filename)
+    if os.path.exists(filepath):
+        with open(filepath) as fh:
+            return yaml.load(fh, Loader=yaml.SafeLoader)
+    else:
+        return {}
+
+
+def opts():
+    preparser = argparse.ArgumentParser(add_help=False)
+    preparser.add_argument("-c", "--config",
+                        help="The config file to run rather than ~/.config/repos.yaml",
+                        default=None)
+    args, remaining = preparser.parse_known_args()
+
+    projects_file = args.config if args.config else '~/.config/repos.yaml'
+
+    print("Using %s config" % projects_file)
+
+    config = projects(projects_file)
+
     all_projects = list(config.keys())
+
+    print("ALL PROJECTS: %s" % all_projects)
+
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=HELP
+        description=HELP % projects_file
     )
     parser.add_argument("--hooks",
                         help="Install hooks only",
@@ -109,12 +133,12 @@ def opts(config):
                         default="")
 
     argcomplete.autocomplete(parser)
-    out = parser.parse_args()
+    out = parser.parse_args(remaining)
 
     if not [p for p in out.projects if p]:
         out.projects = all_projects
 
-    return out
+    return out, config 
 
 
 def git(context, cmd, directory):
@@ -418,14 +442,8 @@ class Cloner:
                 cwd=r)
 
 
-filepath = os.path.expanduser('~/.config/repos.yaml')
-if os.path.exists(filepath):
-    with open(filepath) as fh:
-        all_config = yaml.load(fh)
-else:
-    all_config = {}
 
-options = opts(all_config)
+options, all_config = opts()
 
 COLOURS_ON = not options.no_colour
 
