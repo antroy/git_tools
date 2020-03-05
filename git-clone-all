@@ -4,6 +4,7 @@
 import argcomplete
 import argparse
 import datetime
+import glob
 import os
 import re
 import shutil
@@ -56,35 +57,36 @@ specific ssh key for git urls using the fake hostname.
 '''
 
 
-def projects(filename):
-    filepath = os.path.expanduser(filename)
-    if os.path.exists(filepath):
-        with open(filepath) as fh:
-            return yaml.load(fh, Loader=yaml.SafeLoader)
-    else:
-        return {}
+def projects(project_dir):
+    out = {}
+    for filename in glob.glob("%s/*.yaml" % project_dir):
+        print("Loading: %s" % filename)
+
+        with open(filename) as fh:
+            projects = yaml.load(fh, Loader=yaml.SafeLoader)
+            for p in projects:
+                projects[p]['config_file'] = filename
+            out.update(projects)
+
+    return out
 
 
 def opts():
     preparser = argparse.ArgumentParser(add_help=False)
     preparser.add_argument("-c", "--config",
-                        help="The config file to run rather than ~/.config/repos.yaml",
-                        default=None)
+                        help="The config dir to find repos yaml files rather than ~/.config/repos.d",
+                        default='~/.config/repos.d')
     args, remaining = preparser.parse_known_args()
 
-    projects_file = args.config if args.config else '~/.config/repos.yaml'
+    projects_dir = os.path.expanduser(args.config)
 
-    print("Using %s config" % projects_file)
-
-    config = projects(projects_file)
+    config = projects(projects_dir)
 
     all_projects = list(config.keys())
 
-    print("ALL PROJECTS: %s" % all_projects)
-
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=HELP % projects_file
+        description=HELP % projects_dir
     )
     parser.add_argument("--hooks",
                         help="Install hooks only",
@@ -126,6 +128,15 @@ def opts():
                         action="store_true",
                         default=False)
 
+    parser.add_argument("--command",
+                        help="Run the command in each project repo.",
+                        default=None)
+
+    parser.add_argument("-e", "--edit",
+                        help="Edit the given project",
+                        action="store_true",
+                        default=False)
+
     parser.add_argument("projects",
                         help="Projects to process",
                         nargs='*',
@@ -141,24 +152,33 @@ def opts():
     return out, config 
 
 
-def git(context, cmd, directory):
-    git_cmd = ["git"] + cmd
-
+def run(context, cmd, directory, verbose=False):
     out = subprocess.run(
-            git_cmd,
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
             cwd=directory
     )
 
+    lines = [line.strip() for line in out.stdout.split("\n")]
+    output = "\n   %s" % "\n    ".join(lines) if verbose else ''
+
+    success = (out.returncode == 0)
+
     print(
             col(BLUE)("%s " % context),
-            " ".join(git_cmd),
-            col(GREEN)("OK") if out.returncode == 0 else col(RED)("Error")
+            col(YELLOW)(" ".join(cmd)),
+            col(GREEN)("OK") if success else col(RED)("Error"),
+            output
     )
 
-    return out.stdout.split("\n")
+
+    return lines, success
+
+
+def git(context, cmd, directory):
+    return run(context, ["git"] + cmd, directory)
 
 
 BOLD, RED, GREEN, YELLOW, BLUE = 1, 31, 32, 33, 34
@@ -190,6 +210,7 @@ def print_in_colour(lines):
 class Cloner:
     def __init__(self, project, config, options):
         self.project = project
+        self.config = config
         self.workspace = os.path.expanduser(config['workspace'])
         self.title = "%s - %s" % (self.project, self.workspace)
         self.subs = config.get('substitutions', {})
@@ -204,6 +225,8 @@ class Cloner:
         self.revert = options.revert
         self.delete = options.delete
         self.pull = options.pull
+        self.command = options.command
+        self.edit = options.edit
 
         self.hooks_dir = config.get('hooks_dir', HOOK_DIR)
 
@@ -236,7 +259,15 @@ class Cloner:
         print(col(BOLD)(col(YELLOW)(self.format(now, width))))
         print(col(BOLD)(col(YELLOW)("=" * width)))
 
-        if self.analysis:
+        if self.edit:
+            config_file = self.config['config_file']
+            cmd = [os.environ.get("EDITOR", "vim"), config_file]
+            subprocess.run(cmd)
+        elif self.command:
+            processes = max(1, cpu_count() - 1)
+            print("Using %s processes" % processes)
+            Pool(processes).map(self.run_command, self.repositories.items())
+        elif self.analysis:
             self.print_analysis()
         elif self.status:
             self.print_status()
@@ -247,7 +278,6 @@ class Cloner:
         else:
             processes = max(1, cpu_count() - 1)
             print("Using %s processes" % processes)
-
             Pool(processes).map(self.process_repo, self.repositories.items())
 
     def sub(self, uri):
@@ -264,15 +294,22 @@ class Cloner:
         if not self.hooks_only:
             if os.path.exists(repo_dir):
                 fetch_command = "pull" if self.pull else "fetch"
-                lines = git(name, [fetch_command], repo_dir)
+                lines, ok = git(name, [fetch_command], repo_dir)
                 print_in_colour(lines)
             else:
                 self.make_parents(repo_dir)
-                lines = git(name,
+                lines, ok = git(name,
                             ["clone", repo_url, repo_dir], self.workspace)
                 print_in_colour(lines)
+                if ok:
+                    self.link_hooks(repo_dir, repo)
+        else:
+            self.link_hooks(repo_dir, repo)
 
-        self.link_hooks(repo_dir, repo.get('ignore_hooks', False))
+    def run_command(self, repo_data):
+        repo_dir, repo = repo_data
+        name = self.name_templ % repo['name']
+        run(name, self.command.split(), repo_dir, True)
 
     def make_parents(self, repo_dir):
         parent = os.path.split(repo_dir)[0]
@@ -280,7 +317,10 @@ class Cloner:
         if not os.path.exists(parent):
             os.makedirs(parent)
 
-    def link_hooks(self, repo_directory, ignore_hooks):
+    def link_hooks(self, repo_directory, repo):
+        init_commands = repo.get('init-commands', [])
+        ignore_hooks = repo.get('ignore_hooks', False)
+
         for hook in os.listdir(self.hooks_dir):
             hook_path = os.path.join(repo_directory, '.git/hooks', hook)
             hook_source = os.path.join(self.hooks_dir, hook)
@@ -294,6 +334,12 @@ class Cloner:
                 print("Adding hook:")
                 print("ln -s %s %s" % (hook_source, hook_path))
                 subprocess.run(["ln", "-s", hook_source, hook_path])
+
+        for command in init_commands:
+            if isinstance(command, str):
+                command = [command]
+            subprocess.run(command, cwd=repo_directory)
+
 
     def ask_to_delete(self, path):
         result = input("Delete this directory [y/n/q]?").strip().lower()

@@ -1,7 +1,7 @@
 # Copy these into your gitconfig, or include this file using:
 # 
 # [include]
-# path = /home/ant/repos/code/git/git/gitconfig
+# path = ~/repos/git_tools/aliases
 
 [format]
 pretty=%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)
@@ -9,4 +9,7 @@ pretty=%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(res
 [alias]
 com=commit -am
 m=merge
-graph=log --graph --all
+
+[gitflow "prefix"]
+feature=feature
+
