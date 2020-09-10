@@ -1,36 +1,55 @@
-#!/bin/bash
+#!/usr/bin/env python3
 
-current_branch=`git branch | grep "^\*" | sed "s/\* //"`
-echo "Currently on $current_branch"
-git fetch --prune
+from subprocess import check_output
 
-branches=`git branch -a | grep "remotes/origin/" | sed "s/remotes\/origin\///"`
 
-for b in $branches
-do
-    git checkout $b > /dev/null 2>&1
-done
+def git(*args):
+    cmd = ["git"] + list(args)
+    result = check_output(cmd).decode().split("\n")
+    return [t.strip() for t in result if t.strip()]
 
-git checkout master > /dev/null 2>&1
-merged=`git branch --merged | grep -v "^* " | sed "s/\s+//"`
 
-if [ "${merged}" == "" ]
-then
-    echo "There are no merged branches that can be removed"
-    exit 0
-fi
+git("fetch")
+print("\n".join(git("branch", "--all")))
 
-echo -e -n "Delete the following:\n${merged}\nlocally and from origin? "
-read -p "[y/n]" yn
 
-case $yn in
-    [Yy]* ) ;;
-    * ) exit 0;;
-esac
 
-for b in $merged
-do
-    git cullbranch -y $b
-done
 
-git checkout $current_branch > /dev/null 2>&1
+#current_branch=`git branch | grep "^\*" | sed "s/\* //"`
+#echo "Currently on $current_branch"
+#git fetch --prune
+#
+#branches=`git branch -a | grep "remotes/origin/" | sed "s/remotes\/origin\///"`
+#
+#for b in $branches
+#do
+#    git checkout $b > /dev/null 2>&1
+#done
+#
+#git checkout master > /dev/null 2>&1
+#merged=`git branch --merged | grep -v "^* " | sed "s/\s+//"`
+#
+#if [ "${merged}" == "" ]
+#then
+#    echo "There are no merged branches that can be removed"
+#    exit 0
+#fi
+#
+#echo -e -n "Delete the following:\n${merged}\nlocally, from origin, or both? "
+#read -p "[l/o/b]" yn
+#
+#case $yn in
+#    [Ll]* ) echo "git branch -D $b";;
+#    [Oo]* ) echo "git push --no-verify origin :$b";;
+#    [Bb]* ) echo "git branch -D $b"; echo "git push --no-verify origin :$b";;
+#    * ) exit 0;;
+#esac
+#
+#for b in $merged
+#do
+#    git cullbranch -y $b
+#      check local  $1   && 
+#      check remote $1   && 
+#done
+#
+#git checkout $current_branch > /dev/null 2>&1

@@ -1,18 +1,46 @@
-#!/bin/bash
+#!/usr/bin/env python
 
-if [ -z "$BRANCHES_TO_SKIP" ]; then
-  BRANCHES_TO_SKIP=(master develop test)
-fi
+from __future__ import print_function
+import re
+import os
+import sys
+from subprocess import check_output
 
-ORIG_BRANCH_NAME=$(git symbolic-ref --short HEAD)
-BRANCH_NAME=`echo $ORIG_BRANCH_NAME | sed -e 's/^\(feature\/\)\?\([A-Z][A-Z0-9]\+-[0-9]\+\).*/\2/'`
+filename = sys.argv[1]
 
-echo "$BRANCH_NAME" | grep "^[A-Z][A-Z0-9]\+-[0-9]\+.*$" &> /dev/null
-IS_JIRA_NAME=$?
+try:
+    branch = check_output(["git", "symbolic-ref", "--short", "HEAD"]).decode()
+except:
+    # This isn't on a branch, so abort. Probably a rebase or cherry-pick
+    sys.exit(0)
 
-BRANCH_EXCLUDED=$(printf "%s\n" "${BRANCHES_TO_SKIP[@]}" | grep -c "^$BRANCH_NAME$")
-BRANCH_IN_COMMIT=$(grep -c "$BRANCH_NAME" $1)
+name = check_output(["git", "config", "--get", "user.name"]).decode()
 
-if [ -n "$BRANCH_NAME" ] && [[ $IS_JIRA_NAME -eq 0 ]] && ! [[ $BRANCH_EXCLUDED -eq 1 ]] && ! [[ $BRANCH_IN_COMMIT -gt 0 ]]; then
-  sed -i.bak -e "1s#^#[$BRANCH_NAME] #" $1
-fi
+try:
+    collaborators = check_output(["git", "config", "--get", "ticket.collaborators"]).decode().split("/")
+except:
+    collaborators = []
+
+ticket_match = re.match(r"dev-(\d+)-.*", branch)
+ticket = ticket_match.group(1) if ticket_match else ""
+initials_array = ["".join(x[0].upper() for x in name.split())] + collaborators
+initials = "/".join(i.strip() for i in initials_array)
+
+with open(os.path.expanduser(filename)) as fh:
+    content=fh.read()
+
+if "merge" in content.lower():
+    sys.exit(0)
+
+m1 = re.search(r"^\[([a-zA-Z/]+)\]", content)
+m2 = re.search(r"(?i)\bticket\s+(\d+)\s+", content)
+
+if m1:
+    initials = m1.group(1).upper()
+    content = re.sub(r"^\[.*?\]", "", content)
+if m2:
+    ticket = m2.group(1)
+    content = re.sub("(?i)\s*-\s+ticket\s+\d+\s+-\s+", "", content)
+
+with open(os.path.expanduser(filename), "w") as fh:
+    print("[%s] - ticket %s - %s" % (initials, ticket, content), file=fh)
