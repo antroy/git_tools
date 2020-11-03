@@ -131,9 +131,20 @@ def remove_merged_remotes():
         remote_merged
     )
 
-    if to_remove:
-        cmd = ["git", "push", "--delete"] + to_remove
-        print("RUN: %s" % cmd)
+    refs_by_origin = {}
+
+    for branch in to_remove:
+        origin, ref = branch.split("/")
+
+        if not origin in refs_by_origin:
+            refs_by_origin[origin] = []
+
+        refs_by_origin[origin].append(ref)
+
+    for origin in refs_by_origin.keys():
+        cmd = ["push", origin, "--delete"] + refs_by_origin[origin]
+        print("Deleting: %s" % ", ".join(to_remove))
+        git(*cmd)
 
 def initialize():
     head = git("rev-parse", "--abbrev-ref", "HEAD")[0]
