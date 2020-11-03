@@ -1,55 +1,157 @@
 #!/usr/bin/env python3
 
-from subprocess import check_output
+import re
+import os
 
+from subprocess import CalledProcessError, run, PIPE
+from tempfile import NamedTemporaryFile
+
+class Branch:
+    def __init__(self, branch, origins):
+        pat = r"^(\*?)\s*(.*?)\s+([0-9a-f]{7,9}) (?:\[((?:%s).*?)(: gone)?])?(.*?)" % "|".join(origins)
+        m = re.match(pat, branch)
+
+        remote = m.group(2).strip().startswith("remotes")
+
+        if remote:
+            self.local = None
+            self.remote = re.sub(r"remotes/", "", m.group(2).strip()) if m.group(2) else None
+            self.name = self.remote
+            self.tracking = False
+        else:
+            self.local = m.group(2).strip()
+            self.name = self.local
+            self.remote = m.group(4).strip() if m.group(4) else None
+            self.tracking = not bool(m.group(5))
+
+        self.current = bool(m.group(1))
+        self.commit = m.group(3).strip()
+        self.message = m.group(6).strip()
+        self.original = branch
+
+    def __str__(self):
+        return "Local: %s; Remote: %s; Commit: %s, Current: %s; Tracking: %s\n%s" % (self.local, self.remote, self.commit, self.current, self.tracking, self.message)
 
 def git(*args):
-    cmd = ["git"] + list(args)
-    result = check_output(cmd).decode().split("\n")
-    return [t.strip() for t in result if t.strip()]
+    try:
+        cmd = ["git"]
+        for a in args:
+            cmd.append(a)
+        print(" ".join(cmd))
+        result = run(cmd, check=True, stdout=PIPE).stdout
+    except CalledProcessError as e:
+        result = e.output
+        print(result)
+        return None
+
+    return [t.strip() for t in result.decode().split("\n") if t.strip()]
+
+def all_branches(*flags):
+    origins = git("remote")
+
+    args = ["branch", "--all", "-vv"] + list(*flags)
+    return [Branch(b, origins) for b in git(*args) if not "-> origin" in b]
+
+def local_branches(*flags):
+    return [b for b in all_branches(flags) if b.local]
+
+def remote_branches(*flags):
+    return [b for b in all_branches(flags) if b.remote and not b.local]
+
+def review(message, branches):
+    if not branches:
+        return branches
+
+    temp_filehandle = NamedTemporaryFile(suffix=".txt", delete=False)
+    temp_file = temp_filehandle.name
+    temp_filehandle.write(b"")
+    temp_filehandle.close()
+
+    with open(temp_file, "w") as fh:
+        for m in message:
+            print("# %s" % m, file=fh)
+        for b in branches:
+            print("# %s" % b.original, file=fh)
+            print(b.name, file=fh)
+
+        print("", file=fh)
+
+    editor = os.environ.get('EDITOR')
+    run([editor, temp_file])
+
+    with open(temp_file) as fh:
+        out = [line.strip() for line in fh if line.strip() and not line.strip().startswith("#")]
+
+    os.remove(temp_file)
+
+    return out
+
+def remove_local_with_missing_remote():
+    local = local_branches()
+
+    with_missing_remote = [b for b in local if not b.tracking]
+    to_remove = review(
+            [
+                "These branches are following remote branches that no longer exist.",
+                "Remove any branches you wish to keep from the list."
+            ],
+            with_missing_remote 
+    )
+
+    for b in to_remove:
+        print("Deleting %s" % b)
+        git("branch", "-D", b)
+
+def remove_local_without_remote():
+    local = local_branches()
+    without_remote = [b for b in local if not b.remote]
+
+    to_remove = review(
+            [
+                "The following branches have no remote and will be deleted.",
+                "Remove any branches you wish to keep from the list."
+            ],
+            without_remote
+    )
+
+    for b in to_remove:
+        print("Deleting %s" % b)
+        git("branch", "-D", b)
+
+def remove_merged_remotes():
+    all_merged = remote_branches("--merged", "origin/master")
+    remote_merged = [b for b in all_merged if not b.name == "origin/master"]
 
 
-git("fetch")
-print("\n".join(git("branch", "--all")))
+    to_remove = review(
+        [
+            "The following remote branches have been merged into master and will be deleted.",
+            "Please review and remove any that you do NOT want to delete:"
+        ], 
+        remote_merged
+    )
 
+    if to_remove:
+        cmd = ["git", "push", "--delete"] + to_remove
+        print("RUN: %s" % cmd)
 
+def initialize():
+    head = git("rev-parse", "--abbrev-ref", "HEAD")[0]
+    if head == 'HEAD':
+        head = git("rev-parse", "HEAD")[0]
 
+    print("Current Head: %s" % head)
+    git("checkout", "master")
+    git("fetch")
+    return head
 
-#current_branch=`git branch | grep "^\*" | sed "s/\* //"`
-#echo "Currently on $current_branch"
-#git fetch --prune
-#
-#branches=`git branch -a | grep "remotes/origin/" | sed "s/remotes\/origin\///"`
-#
-#for b in $branches
-#do
-#    git checkout $b > /dev/null 2>&1
-#done
-#
-#git checkout master > /dev/null 2>&1
-#merged=`git branch --merged | grep -v "^* " | sed "s/\s+//"`
-#
-#if [ "${merged}" == "" ]
-#then
-#    echo "There are no merged branches that can be removed"
-#    exit 0
-#fi
-#
-#echo -e -n "Delete the following:\n${merged}\nlocally, from origin, or both? "
-#read -p "[l/o/b]" yn
-#
-#case $yn in
-#    [Ll]* ) echo "git branch -D $b";;
-#    [Oo]* ) echo "git push --no-verify origin :$b";;
-#    [Bb]* ) echo "git branch -D $b"; echo "git push --no-verify origin :$b";;
-#    * ) exit 0;;
-#esac
-#
-#for b in $merged
-#do
-#    git cullbranch -y $b
-#      check local  $1   && 
-#      check remote $1   && 
-#done
-#
-#git checkout $current_branch > /dev/null 2>&1
+def reset(commit):
+    if commit:
+        git("checkout", commit)
+
+if __name__ == "__main__":
+    current_commit = initialize()
+    remove_merged_remotes()
+    remove_local_with_missing_remote()
+    remove_local_without_remote()
+    reset(current_commit)
