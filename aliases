@@ -9,6 +9,7 @@ pretty=%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(res
 [alias]
 com=commit -am
 m=merge
+graph=log --graph
 
 [gitflow "prefix"]
 feature=feature
