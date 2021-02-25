@@ -6,6 +6,22 @@ import os
 import sys
 from subprocess import check_output
 
+# USAGE: Copy this file into your hooks directory. 
+# The script will get the ticket number from the branch (if in the form [team]-[ticket_no]-MyBranch),
+# unless the ticket is already in the commit message.
+# It will get your initials from git config user.name if the comment does not already have
+# a "[JB] ..." part.
+# If there is a section in the git config called ticket.collaborators, it will add the content 
+# of that to the collaborators section.
+# To add collaborators, run 'git config ticket.collaborators "AB/CD".
+
+# Examples:
+# 1. Message "[JB] - platform 123 - Message" will be unchanged
+# 2. Message "basket 123 - Message" with user.name Jane Doe will become "[JD] - basket 123 - Message"
+# 3. Message "[JB] Message" on branch checkout-123-Whatever will become "[JB] - checkout 123- Message"
+# 4. Message "Message" on branch basket-123, with user.name "Joe Blogs" and ticket.collaborators "CD/EF" will become: 
+# "[JB/CD/EF] - basket 123 - Message"
+
 filename = sys.argv[1]
 
 try:
@@ -20,9 +36,16 @@ try:
     collaborators = check_output(["git", "config", "--get", "ticket.collaborators"]).decode().split("/")
 except:
     collaborators = []
+teams_pattern = r"(basket|checkout|platform)"
+branch_pattern = r"%s-(\d+)-.*" % teams_pattern
+commit_message_ticket_pattern = r"(?i)\b%s\s+(\d+)\s+" % teams_pattern
+commit_message_collaborators_pattern = r"^\[([a-zA-Z/]+)\]"
+remove_ticket_number_pattern = "(?i)\s*-\s+%s\s+\d+\s+-\s+" % teams_pattern
+remove_collaborators_pattern = r"^\[.*?\]"
 
-ticket_match = re.match(r"dev-(\d+)-.*", branch)
-ticket = ticket_match.group(1) if ticket_match else ""
+ticket_match = re.match(branch_pattern, branch)
+team = ticket_match.group(1) if ticket_match else ""
+ticket = ticket_match.group(2) if ticket_match else ""
 initials_array = ["".join(x[0].upper() for x in name.split())] + collaborators
 initials = "/".join(i.strip() for i in initials_array)
 
@@ -32,15 +55,16 @@ with open(os.path.expanduser(filename)) as fh:
 if "merge" in content.lower():
     sys.exit(0)
 
-m1 = re.search(r"^\[([a-zA-Z/]+)\]", content)
-m2 = re.search(r"(?i)\bticket\s+(\d+)\s+", content)
+has_collaborators = re.search(commit_message_collaborators_pattern, content)
+has_ticket_no = re.search(commit_message_ticket_pattern, content)
 
-if m1:
-    initials = m1.group(1).upper()
-    content = re.sub(r"^\[.*?\]", "", content)
-if m2:
-    ticket = m2.group(1)
-    content = re.sub("(?i)\s*-\s+ticket\s+\d+\s+-\s+", "", content)
+if has_collaborators:
+    initials = has_collaborators.group(1).upper()
+    content = re.sub(remove_collaborators_pattern, "", content)
+if has_ticket_no:
+    team = has_ticket_no.group(1)
+    ticket = has_ticket_no.group(2)
+    content = re.sub(remove_ticket_number_pattern, "", content)
 
 with open(os.path.expanduser(filename), "w") as fh:
-    print("[%s] - ticket %s - %s" % (initials, ticket, content), file=fh)
+    print("[%s] - %s %s - %s" % (initials, team, ticket, content), file=fh)

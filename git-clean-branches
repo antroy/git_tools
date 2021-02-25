@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 
-import re
+import argparse
 import os
+import re
+import sys
 
 from subprocess import CalledProcessError, run, PIPE
 from tempfile import NamedTemporaryFile
@@ -32,6 +35,7 @@ class Branch:
     def __str__(self):
         return "Local: %s; Remote: %s; Commit: %s, Current: %s; Tracking: %s\n%s" % (self.local, self.remote, self.commit, self.current, self.tracking, self.message)
 
+
 def git(*args):
     try:
         cmd = ["git"]
@@ -46,17 +50,21 @@ def git(*args):
 
     return [t.strip() for t in result.decode().split("\n") if t.strip()]
 
+
 def all_branches(*flags):
     origins = git("remote")
 
     args = ["branch", "--all", "-vv"] + list(*flags)
     return [Branch(b, origins) for b in git(*args) if not "-> origin" in b]
 
+
 def local_branches(*flags):
     return [b for b in all_branches(flags) if b.local]
 
+
 def remote_branches(*flags):
     return [b for b in all_branches(flags) if b.remote and not b.local]
+
 
 def review(message, branches):
     if not branches:
@@ -85,6 +93,7 @@ def review(message, branches):
     os.remove(temp_file)
 
     return out
+
 
 def remove_local_with_missing_remote():
     local = local_branches()
@@ -146,6 +155,7 @@ def remove_merged_remotes():
         print("Deleting: %s" % ", ".join(to_remove))
         git(*cmd)
 
+
 def initialize():
     head = git("rev-parse", "--abbrev-ref", "HEAD")[0]
     if head == 'HEAD':
@@ -156,13 +166,45 @@ def initialize():
     git("fetch")
     return head
 
+
 def reset(commit):
     if commit:
         git("checkout", commit)
 
+
+def options():
+    parser = argparse.ArgumentParser(description="Interactive delete of branches that should be safe to remove")
+    parser.add_argument("-l", "--local", action='store_true', help="Remove local branches with missing or no remote", default=False)
+    parser.add_argument("-m", "--merged", action='store_true', help="Remove merged branches from local and remote", default=False)
+    parser.add_argument("-a", "--all", action='store_true', help="Remove all safe to delete branches", default=False)
+
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except:
+        pass
+
+    out = parser.parse_args()
+
+    if out.all:
+        out.local = True
+        out.merged = True
+
+    if not out.local and not out.merged:
+        parser.print_help()
+        sys.exit(0)
+
+    return out
+
+
 if __name__ == "__main__":
+    opts = options()
     current_commit = initialize()
-    remove_merged_remotes()
-    remove_local_with_missing_remote()
-    remove_local_without_remote()
+    if opts.merged:
+        remove_merged_remotes()
+
+    if opts.local:
+        remove_local_with_missing_remote()
+        remove_local_without_remote()
+
     reset(current_commit)
