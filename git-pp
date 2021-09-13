@@ -1,5 +1,6 @@
 #!/bin/bash
 
+flags=$*
 git pull --prune && git graph -10
 dead_branches=`git branch --format='%(refname:short) [%(upstream) %(upstream:track)]' | grep '\[gone\]\]\|\[ \]' | cut -d' ' -f1`
 
@@ -10,15 +11,17 @@ then
         echo $branch
     done
 
-    echo "Remove the above local branches that have no remote [y/N]?"
+    echo "Remove the above local branches that have no remote [y]es, [N]o, force [d]elete?"
     read yes
+    yes=`echo $yes | tr '[:lower:]' '[:upper:]'`
 
-    if [ "$yes" == "y" ] || [ "$yes" == "Y" ]
+    if [ "$yes" == "Y" ] || [ "$yes" == "D" ]
     then
-        for branch in $dead_branches
-        do
-            git branch --delete $branch
-        done
+      if [ "$yes" == "Y" ]; then delete="--delete"; else delete="-D"; fi
+      for branch in $dead_branches
+      do
+          git branch $delete $flags $branch
+      done
     fi
 fi
 

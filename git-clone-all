@@ -60,8 +60,6 @@ specific ssh key for git urls using the fake hostname.
 def projects(project_dir):
     out = {}
     for filename in glob.glob("%s/*.yaml" % project_dir):
-        print("Loading: %s" % filename)
-
         with open(filename) as fh:
             projects = yaml.load(fh, Loader=yaml.SafeLoader)
             for p in projects:
@@ -137,6 +135,11 @@ def opts():
                         action="store_true",
                         default=False)
 
+    parser.add_argument("--autocompletion",
+                        help="Output the bash completion script",
+                        action="store_true",
+                        default=False)
+
     parser.add_argument("projects",
                         help="Projects to process",
                         nargs='*',
@@ -150,6 +153,34 @@ def opts():
         out.projects = all_projects
 
     return out, config 
+
+
+def print_git_auto_complete():
+    script_path = sys.argv[0]
+    delete_line = "delete_this_line"
+    init_autocomplete = "_git_clone_all(){ _python_argcomplete_%s ; }" % script_path
+    usage = "\n# USAGE: Add the following to your .bashrc to enable completion:\n#    . <(git clone-all --autocompletion)"
+
+    out = subprocess.run(
+            ["register-python-argcomplete",
+             "--external-argcomplete-script", 
+             script_path,
+             delete_line],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
+    )
+
+    lines = [line.strip() for line in out.stdout.split("\n") if delete_line not in line]
+    lines.append(init_autocomplete)
+    lines.append(usage)
+    print("\n".join(lines))
+
+
+def process_shortcircuit_commands(options):
+    if options.autocompletion:
+        print_git_auto_complete()
+        sys.exit(0)
 
 
 def run(context, cmd, directory, verbose=False):
@@ -490,6 +521,8 @@ class Cloner:
 
 
 options, all_config = opts()
+
+process_shortcircuit_commands(options)
 
 COLOURS_ON = not options.no_colour
 

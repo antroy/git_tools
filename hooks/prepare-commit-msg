@@ -21,7 +21,7 @@ from subprocess import check_output
 # 3. Message "[JB] Message" on branch checkout-123-Whatever will become "[JB] - checkout 123- Message"
 # 4. Message "Message" on branch basket-123, with user.name "Joe Blogs" and ticket.collaborators "CD/EF" will become: 
 # "[JB/CD/EF] - basket 123 - Message"
-
+sys.exit(0)
 filename = sys.argv[1]
 
 try:
