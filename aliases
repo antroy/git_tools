@@ -4,12 +4,19 @@
 # path = ~/repos/git_tools/aliases
 
 [format]
-pretty=%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)
+pretty=%C(bold blue)%h%C(reset) %C(bold green)[%ad]%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)
+
+[log]
+date=human
+
+[tag]
+sort=version:refname
 
 [alias]
 com=commit -am
 m=merge
 graph=log --graph --all
+fpush=push --force-with-lease
 
 [gitflow "prefix"]
 feature=feature

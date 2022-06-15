@@ -1,6 +1,6 @@
 #!/bin/bash
 
-current=`git current-branch`
+current=$(git rev-parse --abbrev-ref HEAD)
 
 if [[ "$1" == "" ]]
 then
@@ -9,4 +9,12 @@ else
     remote=$1
 fi
 
-git push -u $remote $current
+git push -u "$remote" "$current" 2>&1 | tee /tmp/gitpush
+
+url=$( grep -A1 "Create a pull request for" /tmp/gitpush | tail -n1 | sed "s/remote: \+//")
+
+if [[ "$url" != "" ]]
+then
+  echo Create Pull Request...
+  python -m webbrowser "$url" &> /dev/null
+fi
